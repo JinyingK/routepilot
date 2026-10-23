@@ -1,0 +1,603 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#1264e8">
+<title>RoutePilot - 智能配送路线</title>
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: #f3f6fb; color: #17243a;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+main { max-width: 650px; margin: auto; padding: 20px 15px 40px; }
+header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.logo {
+  width: 48px; height: 48px; border-radius: 15px;
+  background: #1264e8; color: white; display: grid;
+  place-items: center; font-size: 25px;
+}
+h1 { font-size: 24px; margin: 0 0 4px; }
+.sub { color: #718096; font-size: 13px; }
+.card {
+  background: white; padding: 18px; border-radius: 18px;
+  margin-bottom: 14px; box-shadow: 0 3px 14px #1d35570a;
+}
+h2 { font-size: 16px; margin: 0 0 14px; }
+label { display: block; font-size: 13px; margin-bottom: 7px; color: #5a6980; }
+input {
+  width: 100%; min-width: 0; padding: 12px;
+  border: 1px solid #dce3ed; border-radius: 10px;
+  font-size: 15px; background: white; color: #17243a;
+}
+button {
+  border: 0; border-radius: 10px; padding: 12px 14px;
+  font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.primary { background: #1264e8; color: white; width: 100%; }
+.secondary { background: #edf3ff; color: #1557bc; }
+.danger { color: #b42335; background: #fff0f1; padding: 8px 10px; }
+.field { margin-bottom: 14px; }
+.address-row {
+  display: flex; align-items: center; gap: 9px; margin-bottom: 10px;
+}
+.number {
+  flex-shrink: 0; width: 29px; height: 29px; border-radius: 50%;
+  background: #eaf1ff; color: #1264e8; display: grid; place-items: center;
+  font-weight: 700; font-size: 13px;
+}
+.address-row input { flex: 1; }
+.address-row.done input { color: #8490a2; text-decoration: line-through; }
+.stop {
+  padding: 13px 0; border-bottom: 1px solid #edf0f5;
+}
+.stop:last-child { border-bottom: 0; }
+.stop-head { display: flex; gap: 10px; align-items: flex-start; }
+.stop-name { flex: 1; overflow-wrap: anywhere; font-size: 14px; line-height: 1.5; }
+.stop-actions { display: flex; gap: 8px; margin: 10px 0 0 39px; flex-wrap: wrap; }
+.small { font-size: 12px; color: #758197; line-height: 1.6; }
+.status { margin-top: 12px; font-size: 13px; line-height: 1.6; }
+.metrics { display: flex; gap: 10px; margin-bottom: 14px; }
+.metric { background: #f1f6ff; padding: 12px; border-radius: 12px; flex: 1; }
+.metric strong { display: block; font-size: 19px; color: #145bd0; }
+.metric span { font-size: 12px; color: #718096; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="logo">↗</div>
+    <div>
+      <h1>RoutePilot</h1>
+      <div class="sub">多地址智能配送路线</div>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2>出发设置</h2>
+    <div class="field">
+      <label for="start">出发地址</label>
+      <input id="start" placeholder="输入仓库或起点地址">
+    </div>
+    <label for="returnHome">
+      <input id="returnHome" type="checkbox"
+        style="width:auto;vertical-align:middle;margin-right:6px">
+      最后返回出发点
+    </label>
+  </section>
+
+  <section class="card">
+    <h2>配送地址</h2>
+    <div id="addressInputs"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <button class="secondary" id="add">＋ 添加地址</button>
+      <button class="secondary" id="paste">批量粘贴</button>
+    </div>
+    <p class="small">批量粘贴时，每行填写一个完整地址。</p>
+  </section>
+
+  <section class="card">
+    <h2>路线规划</h2>
+    <div class="field">
+      <label for="goal">优化目标</label>
+      <select id="goal" style="width:100%;padding:12px;border:1px solid #dce3ed;border-radius:10px;background:white">
+        <option value="distance">按直线距离估算</option>
+      </select>
+    </div>
+    <button class="primary" id="optimize">优化访问顺序</button>
+    <div class="status" id="status" role="status">
+      添加地址后，即可尝试优化访问顺序。
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>配送清单</h2>
+    <div class="metrics">
+      <div class="metric"><strong id="count">0</strong><span>配送地点</span></div>
+      <div class="metric"><strong id="finished">0</strong><span>已完成</span></div>
+    </div>
+    <div id="routeList" class="small">路线尚未生成。</div>
+    <button id="navigateAll" class="primary" style="margin-top:15px">
+      在地图中查看路线
+    </button>
+    <p class="small">本版本只做初步排序，尚未计算真实道路距离或驾驶时间。</p>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const KEY = "routepilot-v1";
+let state = {
+  start: "",
+  returnHome: false,
+  addresses: [{ text: "", done: false }],
+  ordered: false
+};
+
+try {
+  const saved = localStorage.getItem(KEY);
+  if (saved) state = { ...state, ...JSON.parse(saved) };
+} catch (e) {}
+
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+}
+
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&":"&amp;", "<":"&lt;", ">":"&gt;",
+    '"':"&quot;", "'":"&#39;"
+  }[c]));
+}
+
+function renderInputs() {
+  $("start").value = state.start;
+  $("returnHome").checked = state.returnHome;
+  $("addressInputs").innerHTML = state.addresses.map((a, i) => `
+    <div class="address-row ${a.done ? "done" : ""}">
+      <div class="number">${i + 1}</div>
+      <input data-address="${i}" aria-label="配送地址 ${i + 1}"
+        placeholder="输入第 ${i + 1} 个地址"
+        value="${escapeHTML(a.text)}">
+      <button class="danger" data-delete="${i}" aria-label="删除地址">×</button>
+    </div>
+  `).join("");
+
+  $("addressInputs").querySelectorAll("[data-address]").forEach(input => {
+    input.addEventListener("input", e => {
+      state.addresses[Number(e.target.dataset.address)].text = e.target.value;
+      state.ordered = false;
+      save();
+    });
+  });
+
+  $("addressInputs").querySelectorAll("[data-delete]").forEach(button => {
+    button.addEventListener("click", e => {
+      state.addresses.splice(Number(e.currentTarget.dataset.delete), 1);
+      state.ordered = false;
+      save();
+      renderInputs();
+      renderRoute();
+    });
+  });
+}
+
+function renderRoute() {
+  const stops = state.addresses.filter(a => a.text.trim());
+  $("count").textContent = stops.length;
+  $("finished").textContent = stops.filter(a => a.done).length;
+
+  if (!stops.length) {
+    $("routeList").textContent = "请先添加配送地址。";
+    return;
+  }
+
+  $("routeList").innerHTML = stops.map((a, i) => `
+    <div class="stop">
+      <div class="stop-head">
+        <div class="number">${i + 1}</div>
+        <div class="stop-name">${escapeHTML(a.text)}</div>
+      </div>
+      <div class="stop-actions">
+        <button class="secondary" data-done="${i}">
+          ${a.done ? "撤销完成" : "标记已送达"}
+        </button>
+        <button class="secondary" data-nav="${i}">导航到此站</button>
+      </div>
+    </div>
+  `).join("");
+
+  $("routeList").querySelectorAll("[data-done]").forEach(btn => {
+    btn.addEventListener("click", e => {
+      const a = stops[Number(e.currentTarget.dataset.done)];
+      a.done = !a.done;
+      save();
+      renderInputs();
+      renderRoute();
+    });
+  });
+
+  $("routeList").querySelectorAll("[data-nav]").forEach(btn => {
+    btn.addEventListener("click", e => {
+      const a = stops[Number(e.currentTarget.dataset.nav)];
+      openMap(a.text);
+    });
+  });
+}
+
+function openMap(destination) {
+  const url = new URL("https://www.google.com/maps/dir/");
+
+  url.searchParams.set("api", "1");
+  url.searchParams.set("destination", destination.trim());
+  url.searchParams.set("travelmode", "driving");
+
+  if (state.start.trim()) {
+    url.searchParams.set("origin", state.start.trim());
+  }
+
+  window.open(url.toString(), "_blank", "noopener");
+}
+
+function distance(a, b) {
+  const rad = n => n * Math.PI / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLon = rad(b.lon - a.lon);
+  const x = Math.sin(dLat / 2) ** 2 +
+    Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) *
+    Math.sin(dLon / 2) ** 2;
+  return 6371000 * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+
+const GEOCODE_CACHE_KEY = "routepilot-geocode-cache-v1";
+
+function readGeocodeCache() {
+  try {
+    return JSON.parse(localStorage.getItem(GEOCODE_CACHE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveGeocodeCache(cache) {
+  try {
+    localStorage.setItem(GEOCODE_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    // 即使无法保存缓存，也允许继续计算。
+  }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+let lastGeocodeRequestAt = 0;
+
+async function geocode(address) {
+  const cache = readGeocodeCache();
+  const key = address.trim().toLowerCase();
+
+  if (cache[key]?.lat && cache[key]?.lon) {
+    return cache[key];
+  }
+
+  const query = address.trim();
+
+  // 第一来源：Nominatim
+  const nominatimURL = new URL(
+    "https://nominatim.openstreetmap.org/search"
+  );
+  nominatimURL.searchParams.set("format", "jsonv2");
+  nominatimURL.searchParams.set("limit", "3");
+  nominatimURL.searchParams.set("countrycodes", "us");
+  nominatimURL.searchParams.set("q", query);
+
+  const wait = Math.max(
+    0,
+    1100 - (Date.now() - lastGeocodeRequestAt)
+  );
+  if (wait > 0) await sleep(wait);
+  lastGeocodeRequestAt = Date.now();
+
+  try {
+    const response = await fetch(nominatimURL);
+    if (response.ok) {
+      const data = await response.json();
+
+      if (data.length > 0) {
+        const result = data[0];
+        const location = {
+          lat: Number(result.lat),
+          lon: Number(result.lon),
+          displayName: result.display_name,
+          source: "Nominatim"
+        };
+
+        cache[key] = location;
+        saveGeocodeCache(cache);
+        return location;
+      }
+    }
+  } catch (error) {
+    // 继续尝试第二来源
+  }
+
+  // 第二来源：Photon 公共演示 API
+  await sleep(1100);
+
+  const photonURL = new URL("https://photon.komoot.io/api/");
+  photonURL.searchParams.set("q", query);
+  photonURL.searchParams.set("limit", "3");
+  photonURL.searchParams.set("lang", "en");
+
+  try {
+    const response = await fetch(photonURL);
+
+    if (response.ok) {
+      const data = await response.json();
+      const feature = data.features?.[0];
+
+      if (feature) {
+        const [lon, lat] = feature.geometry.coordinates;
+        const props = feature.properties || {};
+
+        const location = {
+          lat: Number(lat),
+          lon: Number(lon),
+          displayName: [
+            props.housenumber,
+            props.street,
+            props.city || props.locality,
+            props.state,
+            props.postcode
+          ].filter(Boolean).join(", "),
+          source: "Photon"
+        };
+
+        cache[key] = location;
+        saveGeocodeCache(cache);
+        return location;
+      }
+    }
+  } catch (error) {
+    // 交由下方统一显示错误
+  }
+
+  throw new Error(
+    "两个地址服务都没有找到该地址：" + query +
+    "。请检查门牌号、街道名称和邮政编码。"
+  );
+}
+
+
+function routeCost(order, start, returnHome) {
+  let total = 0;
+  let current = start;
+
+  for (const point of order) {
+    total += distance(current, point.location);
+    current = point.location;
+  }
+
+  if (returnHome) {
+    total += distance(current, start);
+  }
+
+  return total;
+}
+
+function nearestNeighbor(points, start) {
+  const remaining = [...points];
+  const ordered = [];
+  let current = start;
+
+  while (remaining.length > 0) {
+    let bestIndex = 0;
+    let bestDistance = Infinity;
+
+    remaining.forEach((point, index) => {
+      const d = distance(current, point.location);
+
+      if (d < bestDistance) {
+        bestDistance = d;
+        bestIndex = index;
+      }
+    });
+
+    const next = remaining.splice(bestIndex, 1)[0];
+    ordered.push(next);
+    current = next.location;
+  }
+
+  return ordered;
+}
+
+function improve2Opt(order, start, returnHome) {
+  let best = [...order];
+  let bestCost = routeCost(best, start, returnHome);
+  let improved = true;
+  let rounds = 0;
+
+  while (improved && rounds < 100) {
+    improved = false;
+    rounds++;
+
+    for (let i = 0; i < best.length - 1; i++) {
+      for (let k = i + 1; k < best.length; k++) {
+        const candidate = [
+          ...best.slice(0, i),
+          ...best.slice(i, k + 1).reverse(),
+          ...best.slice(k + 1)
+        ];
+
+        const candidateCost = routeCost(
+          candidate, start, returnHome
+        );
+
+        if (candidateCost < bestCost - 0.1) {
+          best = candidate;
+          bestCost = candidateCost;
+          improved = true;
+          break;
+        }
+      }
+
+      if (improved) break;
+    }
+  }
+
+  return best;
+}
+
+async function optimize() {
+  const startAddress = state.start.trim();
+  const stops = state.addresses.filter(a => a.text.trim());
+
+  if (!startAddress || stops.length === 0) {
+    $("status").textContent = "请填写出发地址和至少一个配送地址。";
+    return;
+  }
+
+  $("optimize").disabled = true;
+
+  try {
+    $("status").textContent = "正在查询出发地点……";
+
+    const start = await geocode(startAddress);
+    const points = [];
+    let newLookups = 0;
+
+    for (const stop of stops) {
+      const key = stop.text.trim().toLowerCase();
+      const cached = readGeocodeCache()[key];
+
+      if (!cached && newLookups > 0) {
+        await sleep(1100);
+      }
+
+      if (!cached) newLookups++;
+
+      $("status").textContent =
+        `正在解析地址 ${points.length + 1}/${stops.length}……`;
+
+      const location = await geocode(stop.text);
+
+      points.push({ stop, location });
+    }
+
+    $("status").textContent = "正在计算更合理的访问顺序……";
+
+    const firstPass = nearestNeighbor(points, start);
+    const best = improve2Opt(
+      firstPass,
+      start,
+      state.returnHome
+    );
+
+    state.addresses = best.map(point => point.stop);
+    state.ordered = true;
+
+    save();
+    renderInputs();
+    renderRoute();
+
+    const meters = routeCost(best, start, state.returnHome);
+    const km = (meters / 1000).toFixed(1);
+
+    $("status").textContent =
+      `排序完成！估算直线总距离：${km} 公里。` +
+      "这不是实际道路里程，也不代表最短驾驶时间。";
+
+  } catch (error) {
+    $("status").textContent =
+      "路线计算失败：" + error.message +
+      "。请检查地址和网络后重试。";
+  } finally {
+    $("optimize").disabled = false;
+  }
+}
+
+
+$("start").addEventListener("input", e => {
+  state.start = e.target.value;
+  save();
+});
+
+$("returnHome").addEventListener("change", e => {
+  state.returnHome = e.target.checked;
+  save();
+});
+
+$("add").addEventListener("click", () => {
+  state.addresses.push({ text: "", done: false });
+  state.ordered = false;
+  save();
+  renderInputs();
+});
+
+$("paste").addEventListener("click", () => {
+  const text = prompt("请将地址逐行粘贴到这里：");
+  if (text === null) return;
+  const newStops = text.split(/\r?\n/)
+    .map(s => s.trim()).filter(Boolean)
+    .map(text => ({ text, done: false }));
+  state.addresses = [...state.addresses.filter(a => a.text.trim()), ...newStops];
+  state.ordered = false;
+  save();
+  renderInputs();
+  renderRoute();
+});
+
+$("optimize").addEventListener("click", optimize);
+
+$("navigateAll").addEventListener("click", () => {
+  const stops = state.addresses.filter(
+    stop => stop.text.trim() !== ""
+  );
+
+  if (!state.start.trim()) {
+    $("status").textContent = "请先填写出发地址。";
+    return;
+  }
+
+  if (stops.length === 0) {
+    $("status").textContent = "请先添加配送地址。";
+    return;
+  }
+
+  // 最后一站作为终点，其余地址作为途经点。
+  const destination = stops[stops.length - 1].text.trim();
+  const waypoints = stops
+    .slice(0, -1)
+    .map(stop => stop.text.trim());
+
+  const url = new URL("https://www.google.com/maps/dir/");
+
+  url.searchParams.set("api", "1");
+  url.searchParams.set("origin", state.start.trim());
+  url.searchParams.set("destination", destination);
+  url.searchParams.set("travelmode", "driving");
+
+  if (waypoints.length > 0) {
+    url.searchParams.set("waypoints", waypoints.join("|"));
+  }
+
+  const finalURL = url.toString();
+
+  // 便于排查：在页面中显示实际生成的路线链接。
+  $("status").innerHTML =
+    '路线链接已生成：<a href="' +
+    finalURL.replace(/&/g, "&amp;").replace(/"/g, "&quot;") +
+    '" target="_blank" rel="noopener">点击打开 Google Maps</a>';
+
+  window.open(finalURL, "_blank", "noopener");
+});
+
+renderInputs();
+renderRoute();
+</script>
+</body>
+</html>
